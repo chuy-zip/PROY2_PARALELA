@@ -10,5 +10,11 @@ sudo apt-get update
 sudo apt-get install libssl-dev
 ```
 
-## Ejecución base de bruteforce.c
+## Compilación base de bruteforce.c
 mpicc -o bruteforce bruteforce.c -lcrypto
+
+### Encriptar texto en plain_text.txt
+./bruteforce encrypt 
+
+### Desncriptar el texto usando la key
+mpiexec -n 4 ./bruteforce
