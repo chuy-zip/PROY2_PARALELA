@@ -4,6 +4,8 @@
 #include <mpi.h>
 #include <unistd.h>
 #include <openssl/des.h>
+#include <stdint.h>
+#include <arpa/inet.h> 
 
 #define MAX_SEARCH_PHRASE 1024
 
@@ -67,23 +69,66 @@ unsigned char *read_text_file(const char *filename, int *out_len) {
 int write_cipher_bin(const char *filename, unsigned char *buf, int len) {
     FILE *f = fopen(filename, "wb");
     if(!f) return -1;
-    if(fwrite(&len, sizeof(int), 1, f) != 1) { fclose(f); return -1; }
+    uint32_t ulen = (uint32_t)len;
+    uint32_t netlen = htonl(ulen); // orden de red para compatibilidad
+    if(fwrite(&netlen, sizeof(netlen), 1, f) != 1) { fclose(f); return -1; }
     if(fwrite(buf, 1, len, f) != (size_t)len) { fclose(f); return -1; }
     fclose(f);
     return 0;
 }
 
+
 int read_cipher_bin(const char *filename, unsigned char **out_buf, int *out_len) {
     FILE *f = fopen(filename, "rb");
     if(!f) return -1;
-    int len;
-    if(fread(&len, sizeof(int), 1, f) != 1) { fclose(f); return -1; }
-    unsigned char *buf = malloc(len);
+
+    if(fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long filesize = ftell(f);
+    rewind(f);
+    if(filesize <= 0) { fclose(f); return -1; }
+
+    uint32_t rawlen = 0;
+    size_t n = fread(&rawlen, 1, sizeof(rawlen), f);
+    if(n != sizeof(rawlen)) {
+        rewind(f);
+        unsigned char *buf = malloc(filesize);
+        if(!buf) { fclose(f); return -1; }
+        if(fread(buf, 1, filesize, f) != (size_t)filesize) { free(buf); fclose(f); return -1; }
+        *out_buf = buf;
+        *out_len = (int)filesize;
+        fclose(f);
+        return 0;
+    }
+
+    uint32_t len_host = ntohl(rawlen); // si se escribió con htonl/hton, esto da len correcto
+    uint32_t swapped = ((rawlen & 0xFF) << 24) | ((rawlen & 0xFF00) << 8) | ((rawlen & 0xFF0000) >> 8) | ((rawlen & 0xFF000000) >> 24);
+
+    // header válido y filesize == 4 + len
+    if((long)len_host == filesize - 4) {
+        unsigned char *buf = malloc(len_host);
+        if(!buf) { fclose(f); return -1; }
+        if(fread(buf, 1, len_host, f) != len_host) { free(buf); fclose(f); return -1; }
+        *out_buf = buf; *out_len = (int)len_host; fclose(f); return 0;
+    }
+
+    // header invertido (endianness mismatch) -> swapped coincide
+    if((long)swapped == filesize - 4) {
+        uint32_t corrected = swapped;
+        unsigned char *buf = malloc(corrected);
+        if(!buf) { fclose(f); return -1; }
+        if(fread(buf, 1, corrected, f) != corrected) { free(buf); fclose(f); return -1; }
+        *out_buf = buf; *out_len = (int)corrected; fclose(f); return 0;
+    }
+
+    // el primer uint32 no representa la longitud real -> asumir "no header"
+    // Retroceder y leer todo como ciphertext
+    rewind(f);
+    unsigned char *buf = malloc(filesize);
     if(!buf) { fclose(f); return -1; }
-    if(fread(buf, 1, len, f) != (size_t)len) { free(buf); fclose(f); return -1; }
-    fclose(f);
+    if(fread(buf, 1, filesize, f) != (size_t)filesize) { free(buf); fclose(f); return -1; }
     *out_buf = buf;
-    *out_len = len;
+    *out_len = (int)filesize;
+    fclose(f);
     return 0;
 }
 
