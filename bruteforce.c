@@ -4,16 +4,21 @@
 #include <mpi.h>
 #include <unistd.h>
 #include <openssl/des.h>
-#include <sys/stat.h>
+#include <stdint.h>
+#include <arpa/inet.h> 
+
+#define MAX_SEARCH_PHRASE 1024
 
 void decrypt(long key, unsigned char *ciph, int len) {
     DES_cblock key_block;
     DES_key_schedule schedule;
 
-    memcpy(key_block, &key, 8);
+    memset(&key_block, 0, sizeof(key_block));
+    memcpy(key_block, &key, sizeof(long) < 8 ? sizeof(long) : 8);
     DES_set_odd_parity(&key_block);
     DES_set_key_checked(&key_block, &schedule);
 
+    // DES opera en bloques de 8 bytes
     for(int i = 0; i < len; i += 8) {
         DES_ecb_encrypt((DES_cblock *)(ciph + i), (DES_cblock *)(ciph + i), &schedule, DES_DECRYPT);
     }
@@ -23,7 +28,8 @@ void encrypt(long key, unsigned char *ciph, int len) {
     DES_cblock key_block;
     DES_key_schedule schedule;
 
-    memcpy(key_block, &key, 8);
+    memset(&key_block, 0, sizeof(key_block));
+    memcpy(key_block, &key, sizeof(long) < 8 ? sizeof(long) : 8);
     DES_set_odd_parity(&key_block);
     DES_set_key_checked(&key_block, &schedule);
 
@@ -32,202 +38,280 @@ void encrypt(long key, unsigned char *ciph, int len) {
     }
 }
 
-char search_phrase[] = " the ";
-
-int tryKey(long key, unsigned char *ciph, int len) {
+int tryKey(long key, unsigned char *ciph, int len, const char *search) {
     unsigned char *temp = malloc(len + 1);
+    if (!temp) return 0;
     memcpy(temp, ciph, len);
-    temp[len] = 0;
+    temp[len] = '\0';
 
     decrypt(key, temp, len);
-    int found = (strstr((char *)temp, search_phrase) != NULL);
+    int found = (strstr((char *)temp, search) != NULL);
 
     free(temp);
     return found;
 }
 
-unsigned char default_cipher[] = {108, 245, 65, 63, 125, 200, 150, 66, 17, 170, 207, 170, 34, 31, 70, 215};
-
-unsigned char *read_file_bytes(const char *path, int *out_len, int binary) {
-    FILE *f = fopen(path, binary ? "rb" : "r");
-    if (!f) return NULL;
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        fseek(f, 0, SEEK_END);
-        long l = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        unsigned char *buf = malloc(l + 1);
-        int r = fread(buf, 1, l, f);
-        buf[r] = 0;
-        fclose(f);
-        *out_len = r;
-        return buf;
-    }
-    int len = (int)st.st_size;
-    unsigned char *buf = malloc(len + 1);
-    int r = fread(buf, 1, len, f);
+unsigned char *read_text_file(const char *filename, int *out_len) {
+    FILE *f = fopen(filename, "rb");
+    if(!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char *buf = malloc(sz + 1);
+    if(!buf) { fclose(f); return NULL; }
+    fread(buf, 1, sz, f);
+    buf[sz] = '\0';
     fclose(f);
-    buf[r] = 0;
-    *out_len = r;
+    *out_len = (int)sz;
     return buf;
 }
 
-unsigned char *pad_pkcs5(unsigned char *in, int inlen, int *outlen) {
-    int pad = 8 - (inlen % 8);
-    if (pad == 0) pad = 8;
-    *outlen = inlen + pad;
-    unsigned char *out = malloc(*outlen);
-    memcpy(out, in, inlen);
-    for(int i = 0; i < pad; ++i) out[inlen + i] = (unsigned char)pad;
-    return out;
-}
-
-int write_binary_file(const char *path, unsigned char *buf, int len) {
-    FILE *f = fopen(path, "wb");
-    if (!f) return -1;
-    fwrite(buf, 1, len, f);
+int write_cipher_bin(const char *filename, unsigned char *buf, int len) {
+    FILE *f = fopen(filename, "wb");
+    if(!f) return -1;
+    uint32_t ulen = (uint32_t)len;
+    uint32_t netlen = htonl(ulen); // orden de red para compatibilidad
+    if(fwrite(&netlen, sizeof(netlen), 1, f) != 1) { fclose(f); return -1; }
+    if(fwrite(buf, 1, len, f) != (size_t)len) { fclose(f); return -1; }
     fclose(f);
     return 0;
 }
 
-int write_text_file(const char *path, const char *s) {
-    FILE *f = fopen(path, "w");
-    if (!f) return -1;
-    fprintf(f, "%s", s);
-    fclose(f);
-    return 0;
-}
 
-int main(int argc, char *argv[]) {
-    /* MODO ENCRYPT */
-    if (argc > 1 && strcmp(argv[1], "encrypt") == 0) {
-        int plain_len = 0;
-        unsigned char *plain = read_file_bytes("plain_text.txt", &plain_len, 0);
-        if (!plain) {
-            fprintf(stderr, "Error: no se pudo leer plain_text.txt\n");
-            return 1;
-        }
-        int key_txt_len = 0;
-        unsigned char *keytxt = read_file_bytes("key.txt", &key_txt_len, 0);
-        if (!keytxt) {
-            fprintf(stderr, "Error: no se pudo leer key.txt\n");
-            free(plain);
-            return 1;
-        }
-        char *endptr = NULL;
-        long key = strtoll((char *)keytxt, &endptr, 10);
-        if (endptr == (char *)keytxt) {
-            fprintf(stderr, "Error: key.txt no contiene un número válido\n");
-            free(plain);
-            free(keytxt);
-            return 1;
-        }
-        int padded_len = 0;
-        unsigned char *padded = pad_pkcs5(plain, plain_len, &padded_len);
-        unsigned char *cipher = malloc(padded_len);
-        memcpy(cipher, padded, padded_len);
-        encrypt(key, cipher, padded_len);
-        if (write_binary_file("cipher.bin", cipher, padded_len) != 0) {
-            fprintf(stderr, "Error: no se pudo escribir cipher.bin\n");
-            free(plain); free(keytxt); free(padded); free(cipher);
-            return 1;
-        }
-        char lenstr[64];
-        snprintf(lenstr, sizeof(lenstr), "%d", padded_len);
-        write_text_file("cipher_len.txt", lenstr);
-        printf("Encrypted %d bytes written to cipher.bin\n", padded_len);
-        printf("unsigned char cipher[] = {");
-        for(int i = 0; i < padded_len; ++i) {
-            printf("%u", (unsigned int)cipher[i]);
-            if (i + 1 < padded_len) printf(", ");
-        }
-        printf("};\n");
-        free(plain);
-        free(keytxt);
-        free(padded);
-        free(cipher);
+int read_cipher_bin(const char *filename, unsigned char **out_buf, int *out_len) {
+    FILE *f = fopen(filename, "rb");
+    if(!f) return -1;
+
+    if(fseek(f, 0, SEEK_END) != 0) { fclose(f); return -1; }
+    long filesize = ftell(f);
+    rewind(f);
+    if(filesize <= 0) { fclose(f); return -1; }
+
+    uint32_t rawlen = 0;
+    size_t n = fread(&rawlen, 1, sizeof(rawlen), f);
+    if(n != sizeof(rawlen)) {
+        rewind(f);
+        unsigned char *buf = malloc(filesize);
+        if(!buf) { fclose(f); return -1; }
+        if(fread(buf, 1, filesize, f) != (size_t)filesize) { free(buf); fclose(f); return -1; }
+        *out_buf = buf;
+        *out_len = (int)filesize;
+        fclose(f);
         return 0;
     }
 
-    /* MODO DECRYPT */
+    uint32_t len_host = ntohl(rawlen); // si se escribió con htonl/hton, esto da len correcto
+    uint32_t swapped = ((rawlen & 0xFF) << 24) | ((rawlen & 0xFF00) << 8) | ((rawlen & 0xFF0000) >> 8) | ((rawlen & 0xFF000000) >> 24);
+
+    // header válido y filesize == 4 + len
+    if((long)len_host == filesize - 4) {
+        unsigned char *buf = malloc(len_host);
+        if(!buf) { fclose(f); return -1; }
+        if(fread(buf, 1, len_host, f) != len_host) { free(buf); fclose(f); return -1; }
+        *out_buf = buf; *out_len = (int)len_host; fclose(f); return 0;
+    }
+
+    // header invertido (endianness mismatch) -> swapped coincide
+    if((long)swapped == filesize - 4) {
+        uint32_t corrected = swapped;
+        unsigned char *buf = malloc(corrected);
+        if(!buf) { fclose(f); return -1; }
+        if(fread(buf, 1, corrected, f) != corrected) { free(buf); fclose(f); return -1; }
+        *out_buf = buf; *out_len = (int)corrected; fclose(f); return 0;
+    }
+
+    // el primer uint32 no representa la longitud real -> asumir "no header"
+    // Retroceder y leer todo como ciphertext
+    rewind(f);
+    unsigned char *buf = malloc(filesize);
+    if(!buf) { fclose(f); return -1; }
+    if(fread(buf, 1, filesize, f) != (size_t)filesize) { free(buf); fclose(f); return -1; }
+    *out_buf = buf;
+    *out_len = (int)filesize;
+    fclose(f);
+    return 0;
+}
+
+unsigned char *pad8(unsigned char *in, int in_len, int *out_len) {
+    int pad = 8 - (in_len % 8);
+    if (pad == 0) pad = 8;
+    int newlen = in_len + pad;
+    unsigned char *out = malloc(newlen);
+    if(!out) return NULL;
+    memcpy(out, in, in_len);
+    memset(out + in_len, pad, pad);
+    *out_len = newlen;
+    return out;
+}
+
+int main(int argc, char *argv[]) {
     int N, id;
-    int ciphlen = 16;
+    long upper = (1L << 24);
+    long mylower, myupper;
+    MPI_Status st;
+    MPI_Request req;
+    int ciphlen = 0;
     unsigned char *cipher = NULL;
-    int cipher_len = 0;
-    unsigned char *tmp = read_file_bytes("cipher_len.txt", &cipher_len, 0);
-    if (tmp) {
-        int len_from_file = atoi((char *)tmp);
-        free(tmp);
-        if (len_from_file > 0) {
-            int rlen = 0;
-            unsigned char *bin = read_file_bytes("cipher.bin", &rlen, 1);
-            if (bin && rlen > 0) {
-                cipher = bin;
-                cipher_len = rlen;
-            }
+
+    char search_phrase[MAX_SEARCH_PHRASE];
+    memset(search_phrase, 0, sizeof(search_phrase));
+
+    int do_encrypt = 0;
+    long encrypt_key = 0;
+    if(argc >= 2 && strcmp(argv[1], "encrypt") == 0) {
+        do_encrypt = 1;
+        if(argc < 3) {
+            fprintf(stderr, "Usage: %s encrypt <numeric_key>\n", argv[0]);
+            return 1;
         }
+        encrypt_key = atol(argv[2]);
     }
-    if (!cipher) {
-        cipher_len = sizeof(default_cipher);
-        cipher = malloc(cipher_len);
-        memcpy(cipher, default_cipher, cipher_len);
-    }
-    ciphlen = cipher_len;
 
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &N);
     MPI_Comm_rank(MPI_COMM_WORLD, &id);
 
-    long upper = (1L << 24); // para pruebas rápidas
-    long mylower, myupper;
-    long range_per_node = upper / N;
+    if(id == 0) {
+        FILE *kf = fopen("key.txt", "r");
+        if(!kf) {
+            fprintf(stderr, "Error: no se encuentra key.txt (debe contener la palabra a buscar).\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        if(fgets(search_phrase, sizeof(search_phrase), kf) == NULL) {
+            fclose(kf);
+            fprintf(stderr, "Error: key.txt vacío\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        size_t l = strlen(search_phrase);
+        if(l > 0 && (search_phrase[l-1] == '\n' || search_phrase[l-1] == '\r')) search_phrase[l-1] = '\0';
+        l = strlen(search_phrase);
+        if(l > 0 && (search_phrase[l-1] == '\n' || search_phrase[l-1] == '\r')) search_phrase[l-1] = '\0';
+        fclose(kf);
+    }
+
+    int splen = 0;
+    if(id == 0) splen = strlen(search_phrase) + 1;
+    MPI_Bcast(&splen, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if(splen <= 0 || splen > MAX_SEARCH_PHRASE) {
+        if(id == 0) fprintf(stderr, "search phrase inválida o muy larga\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    MPI_Bcast(search_phrase, splen, MPI_CHAR, 0, MPI_COMM_WORLD);
+
+    /* MODO ENCRYPT */
+    if(do_encrypt) {
+        if(id == 0) {
+            int plain_len;
+            unsigned char *plain = read_text_file("plain_text.txt", &plain_len);
+            if(!plain) {
+                fprintf(stderr, "Error leyendo plain_text.txt\n");
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+
+            int padded_len;
+            unsigned char *padded = pad8(plain, plain_len, &padded_len);
+            free(plain);
+            if(!padded) {
+                fprintf(stderr, "Error en padding\n");
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+
+            encrypt(encrypt_key, padded, padded_len);
+
+            if(write_cipher_bin("cipher.bin", padded, padded_len) != 0) {
+                fprintf(stderr, "Error escribiendo cipher.bin\n");
+                free(padded);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            free(padded);
+            printf("Encrypted %d bytes written to cipher.bin\n", padded_len);
+        }
+        MPI_Finalize();
+        return 0;
+    }
+
+    /* MODO DECRYPT */
+    if(id == 0) {
+        if(read_cipher_bin("cipher.bin", &cipher, &ciphlen) != 0) {
+            fprintf(stderr, "Error leyendo cipher.bin. Asegúrate que existe (puedes generar con 'encrypt').\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+
+    // broadcast length and cipher bytes
+    MPI_Bcast(&ciphlen, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if(ciphlen <= 0) {
+        if(id == 0) fprintf(stderr, "cipher.bin corrupto o vacío\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    if(id != 0) cipher = malloc(ciphlen);
+    MPI_Bcast(cipher, ciphlen, MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+    // rangos de búsqueda
+    int world_size = N;
+    long range_per_node = upper / world_size;
     mylower = range_per_node * id;
     myupper = range_per_node * (id + 1) - 1;
-    if (id == N - 1) myupper = upper - 1;
+    if(id == world_size - 1) myupper = upper - 1;
 
-    if (id == 0) {
-        printf("Running brute force with %d processes. Searching global range [0 .. %ld)\n", N, upper);
+    long found = -1;
+    int flag = 0;
+
+    // Recibir de forma asíncrona notificación de found
+    MPI_Irecv(&found, 1, MPI_LONG, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &req);
+
+    if(id == 0) {
+        printf("Searching for phrase \"%s\" in decrypted text.\n", search_phrase);
     }
-    printf("Process %d searching range %ld to %ld (cipher length %d)\n", id, mylower, myupper, ciphlen);
+    printf("Process %d searching range %ld to %ld\n", id, mylower, myupper);
 
+    double t_start = MPI_Wtime();
+
+    for(long i = mylower; i <= myupper && !flag; ++i) {
+        MPI_Test(&req, &flag, &st);
+        if(flag) break;
+        if(tryKey(i, cipher, ciphlen, search_phrase)) {
+            found = i;
+            printf("Process %d found a candidate key: %ld\n", id, found);
+            for(int node = 0; node < world_size; node++) {
+                if(node != id) {
+                    MPI_Send(&found, 1, MPI_LONG, node, 0, MPI_COMM_WORLD);
+                }
+            }
+            break;
+        }
+    }
+
+    // todos saben que la búsqueda terminó
     MPI_Barrier(MPI_COMM_WORLD);
-    double start = MPI_Wtime();
+    double t_end = MPI_Wtime();
 
-    long local_found_key = 0;
-    long global_found_key = 0;
-    const long CHECK_INTERVAL = 10000;
-
-    for (long i = mylower; i <= myupper; ++i) {
-        if (tryKey(i, cipher, ciphlen)) {
-            local_found_key = i;
-        }
-
-        if (local_found_key || (i % CHECK_INTERVAL == 0)) {
-            MPI_Allreduce(&local_found_key, &global_found_key, 1, MPI_LONG, MPI_MAX, MPI_COMM_WORLD);
-            if (global_found_key != 0) break;
-        }
-    }
-
-    MPI_Allreduce(&local_found_key, &global_found_key, 1, MPI_LONG, MPI_MAX, MPI_COMM_WORLD);
-
-    if (id == 0) {
-        double end = MPI_Wtime();
-        double elapsed = end - start;
-        if (global_found_key) {
+    if(id == 0) {
+        if(found != -1) {
             unsigned char *result = malloc(ciphlen + 1);
-            memcpy(result, cipher, ciphlen);
-            result[ciphlen] = 0;
-            decrypt(global_found_key, result, ciphlen);
-            printf("Key found: %ld\nDecrypted text: %s\n", global_found_key, result);
-            printf("Search Time: %f seconds\n", elapsed);
-            free(result);
+            if(result) {
+                memcpy(result, cipher, ciphlen);
+                result[ciphlen] = '\0';
+                decrypt(found, result, ciphlen);
+                int pad = result[ciphlen-1];
+                int plain_len = ciphlen;
+                if(pad > 0 && pad <= 8) plain_len = ciphlen - pad;
+                result[plain_len] = '\0';
+                printf("Key found: %ld\nDecrypted text: %s\n", found, (char*)result);
+                free(result);
+            } else {
+                printf("Key found: %ld\n", found);
+            }
+            double elapsed = t_end - t_start;
+            printf("Time to find key: %.4f seconds\n", elapsed);
         } else {
-            printf("Key not found in the searched range\n");
-            printf("Time: %f seconds\n", elapsed);
+            printf("Key not found in message\n");
+            double elapsed = t_end - t_start;
+            printf("Elapsed search time: %.4f seconds\n", elapsed);
         }
     }
 
-    free(cipher);
+    if(cipher) free(cipher);
     MPI_Finalize();
     return 0;
 }
