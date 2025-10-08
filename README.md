@@ -10,6 +10,11 @@ sudo apt-get update
 sudo apt-get install libssl-dev
 ```
 
+#### Arch
+```bash
+sudo pacman -S openssl
+```
+
 ## Compilación base de bruteforce.c
 mpicc -o bruteforce bruteforce.c -lcrypto
 
