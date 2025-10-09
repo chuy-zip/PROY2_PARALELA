@@ -181,12 +181,12 @@ void test_specific_keys(int case_id, int world_size, int id, long upper, const c
         printf("----------------------------\n");
         printf("--- Análisis para case %d ---\n", case_id);
         printf("----------------------------\n");
-        printf("Space upper = %ld (llaves van desde 0 hasta %ld)\n", upper, upper - 1);
+        printf("Space upper = %ld (llaves van 0 .. %ld)\n", upper, upper - 1);
         printf("Test key = %ld\n", key);
 
         int owner = (int)(key / range_per_node);
         if (owner >= world_size) owner = world_size - 1;
-        printf("Con %d procesos, range_per_node = %ld\n", world_size, range_per_node);
+        printf("Con %d procesos, range_per_node = %ld -> owner process = %d\n", world_size, range_per_node, owner);
         
         unsigned long long seq_iters = (unsigned long long)key + 1ULL;
         
@@ -353,7 +353,9 @@ int main(int argc, char *argv[]) {
 
     double t_start = MPI_Wtime();
 
-    for(long i = mylower; i <= myupper && !flag; ++i) {
+    // Modificación de distribución de trabajo
+    // Ahora, los procesos prueba claves intercaladas, haciendo que todos tengan la misma chance de encontrar la correcta
+    for(long i = id; i < upper && !flag; i += world_size) {
         MPI_Test(&req, &flag, &st);
         if(flag) break;
         if(tryKey(i, cipher, ciphlen, search_phrase)) {
