@@ -14,7 +14,7 @@ sudo apt-get install libssl-dev
 mpicc -o bruteforce bruteforce.c -lcrypto
 
 ### Encriptar texto en plain_text.txt
-./bruteforce encrypt 
+./bruteforce encrypt < long de encriptacion ej:12345678>
 
-### Desncriptar el texto usando la key
-mpiexec -n 4 ./bruteforce
+### Desencriptar el texto usando la key
+mpiexec -n 4 ./bruteforce decrypt
