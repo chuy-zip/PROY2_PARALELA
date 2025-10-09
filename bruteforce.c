@@ -144,6 +144,78 @@ unsigned char *pad8(unsigned char *in, int in_len, int *out_len) {
     return out;
 }
 
+long test_keys(int key_case) {
+    long key;
+
+    long test_upper = (1L << 24);
+
+    switch (key_case) {
+    case 1:
+        key = (test_upper / 4) + 1;
+    break;
+
+    case 2:
+        key = (test_upper / 2) + (test_upper / 16);
+    break;
+
+    case 3:
+        key = (test_upper - 100);
+    break;
+
+    default:
+        key = 12345;
+    }
+
+    return key;
+}
+
+void test_specific_keys(int case_id, int world_size, int id, long upper, const char *search_phrase) {
+    long key = test_keys(case_id); 
+    long range_per_node = upper / world_size;
+
+    long mylower = range_per_node * id;
+    long myupper = range_per_node * (id + 1) - 1;
+    if (id == world_size - 1) myupper = upper - 1;
+
+    if (id == 0) {
+        printf("----------------------------\n");
+        printf("--- Análisis para case %d ---\n", case_id);
+        printf("----------------------------\n");
+        printf("Space upper = %ld (llaves van 0 .. %ld)\n", upper, upper - 1);
+        printf("Test key = %ld\n", key);
+
+        int owner = (int)(key / range_per_node);
+        if (owner >= world_size) owner = world_size - 1;
+        printf("Con %d procesos, range_per_node = %ld -> owner process = %d\n", world_size, range_per_node, owner);
+        
+        unsigned long long seq_iters = (unsigned long long)key + 1ULL;
+        
+        long owner_mylower = range_per_node * owner;
+        unsigned long long par_iters_owner = (unsigned long long)(key - owner_mylower) + 1ULL;
+        
+        double speedup_theoretical = (double)seq_iters / (double)par_iters_owner;
+
+        printf("Secuencial: iteraciones hasta hallar = %llu\n", seq_iters);
+        printf("Paralelo (naive): owner = %d, owner_mylower = %ld, iteraciones owner = %llu\n",
+               owner, owner_mylower, par_iters_owner);
+        printf("Speedup teórico = seq_iters / par_owner_iters = %.4f\n", speedup_theoretical);
+
+        printf("Rangos por proceso (naive):\n");
+        for (int p = 0; p < world_size; ++p) {
+            long low = range_per_node * p;
+            long up = range_per_node * (p + 1) - 1;
+            if (p == world_size - 1) up = upper - 1;
+            printf("  proc %d: %ld .. %ld\n", p, low, up);
+        }
+
+        printf("---------------------------\n");
+        printf("--- Fin análisis case %d ---\n", case_id);
+        printf("---------------------------\n\n");
+    }
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
 int main(int argc, char *argv[]) {
     int N, id;
     long upper = (1L << 24);
@@ -170,6 +242,20 @@ int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &N);
     MPI_Comm_rank(MPI_COMM_WORLD, &id);
+
+    // Ejecución de pruebas con test-keys en la llamada a ejecución
+    if (argc >= 2 && strcmp(argv[1], "test-keys") == 0) {
+        if (id == 0) {
+            printf("Ejecutando pruebas de llaves (Ejercicio 9)\n\n");
+        }
+
+        for (int i = 1; i <= 3; i++) {
+            test_specific_keys(i, N, id, upper, search_phrase);
+        }
+
+        MPI_Finalize();
+        return 0;
+    }
 
     if(id == 0) {
         FILE *kf = fopen("key.txt", "r");
