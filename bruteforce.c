@@ -66,12 +66,11 @@ unsigned char *read_text_file(const char *filename, int *out_len) {
     return buf;
 }
 
+// Escribe SOLO los bytes cifrados (sin header de 4 bytes)
+// Esto permite compatibilidad con bins "puros" creados por otros grupos.
 int write_cipher_bin(const char *filename, unsigned char *buf, int len) {
     FILE *f = fopen(filename, "wb");
     if(!f) return -1;
-    uint32_t ulen = (uint32_t)len;
-    uint32_t netlen = htonl(ulen); // orden de red para compatibilidad
-    if(fwrite(&netlen, sizeof(netlen), 1, f) != 1) { fclose(f); return -1; }
     if(fwrite(buf, 1, len, f) != (size_t)len) { fclose(f); return -1; }
     fclose(f);
     return 0;
@@ -90,6 +89,7 @@ int read_cipher_bin(const char *filename, unsigned char **out_buf, int *out_len)
     uint32_t rawlen = 0;
     size_t n = fread(&rawlen, 1, sizeof(rawlen), f);
     if(n != sizeof(rawlen)) {
+        // archivo demasiado pequeño o no contiene header -> leer todo como ciphertext
         rewind(f);
         unsigned char *buf = malloc(filesize);
         if(!buf) { fclose(f); return -1; }
@@ -283,7 +283,6 @@ int main(int argc, char *argv[]) {
     }
 
     // todos saben que la búsqueda terminó
-    MPI_Barrier(MPI_COMM_WORLD);
     double t_end = MPI_Wtime();
 
     if(id == 0) {
