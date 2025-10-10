@@ -250,7 +250,7 @@ int main(int argc, char *argv[]) {
         }
 
         for (int i = 1; i <= 3; i++) {
-            test_specific_keys(i, N, id, upper, search_phrase);
+            test_specific_keys(i, N, id, upper);
         }
 
         MPI_Finalize();
