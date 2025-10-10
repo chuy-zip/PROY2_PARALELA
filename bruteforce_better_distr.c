@@ -169,7 +169,7 @@ long test_keys(int key_case) {
     return key;
 }
 
-void test_specific_keys(int case_id, int world_size, int id, long upper, const char *search_phrase) {
+void test_specific_keys(int case_id, int world_size, int id, long upper) {
     long key = test_keys(case_id); 
     long range_per_node = upper / world_size;
 
@@ -196,11 +196,11 @@ void test_specific_keys(int case_id, int world_size, int id, long upper, const c
         double speedup_theoretical = (double)seq_iters / (double)par_iters_owner;
 
         printf("Secuencial: iteraciones hasta hallar = %llu\n", seq_iters);
-        printf("Paralelo (naive): owner = %d, owner_mylower = %ld, iteraciones owner = %llu\n",
+        printf("Paralelo (intercalado): owner = %d, owner_mylower = %ld, iteraciones owner = %llu\n",
                owner, owner_mylower, par_iters_owner);
         printf("Speedup teórico = seq_iters / par_owner_iters = %.4f\n", speedup_theoretical);
 
-        printf("Rangos por proceso (naive):\n");
+        printf("Rangos por proceso (intercalado):\n");
         for (int p = 0; p < world_size; ++p) {
             long low = range_per_node * p;
             long up = range_per_node * (p + 1) - 1;

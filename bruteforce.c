@@ -169,7 +169,7 @@ long test_keys(int key_case) {
     return key;
 }
 
-void test_specific_keys(int case_id, int world_size, int id, long upper, const char *search_phrase) {
+void test_specific_keys(int case_id, int world_size, int id, long upper) {
     long key = test_keys(case_id); 
     long range_per_node = upper / world_size;
 
