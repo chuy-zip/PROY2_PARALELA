@@ -17,7 +17,9 @@ sudo apt-get install libssl-dev
 sudo pacman -S openssl
 ```
 
-## Compilación base de bruteforce.c
+## Instrucciones de compilación y ejecución
+
+### Compilación base de bruteforce.c
 
 ```bash
 mpicc -o bruteforce bruteforce.c -lcrypto
@@ -29,7 +31,7 @@ mpicc -o bruteforce bruteforce.c -lcrypto
 ./bruteforce encrypt 
 ```
 
-### Desncriptar el texto usando la key
+### Desencriptar el texto usando la key
 
 ```bas
 mpiexec -n 4 ./bruteforce
